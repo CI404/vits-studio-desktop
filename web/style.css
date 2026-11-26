@@ -64,6 +64,17 @@ body {
 .ghost { border-style: solid; }
 .ghost.danger:hover { border-color: var(--danger); color: var(--danger); }
 .sidebar-foot { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.device-pick { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.device-pick select {
+  flex: 1; max-width: 118px; background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px; padding: 4px 6px; font-size: 12px;
+  outline: none;
+}
+.device-pick select:focus { border-color: var(--accent); }
+.device-pick select:disabled { opacity: .6; }
+.device-hint { line-height: 1.45; color: #ffb020; }
+.device-hint.ok { color: var(--ok); }
+.device-hint.warn { color: #ffb020; }
 .small { font-size: 11px; }
 .muted { color: var(--muted); }
 .empty { color: var(--muted); font-size: 12px; padding: 10px 2px; }

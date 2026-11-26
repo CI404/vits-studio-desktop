@@ -39,7 +39,9 @@
     audioURL: null,      // 当前音频的 objectURL，用于释放
     saveFilename: '',    // 本次合成建议的下载文件名（模型id_时间戳.wav）
     savedPath: '',       // 最近一次成功保存的绝对路径（「打开文件夹」用）
-    saving: false        // 是否正在保存到磁盘
+    saving: false,       // 是否正在保存到磁盘
+    devicePref: 'auto',  // 推理设备选择：auto | cpu | gpu
+    switchingDevice: false
   };
 
   // DOM 引用统一在 boot() 里填充，避免脚本在 DOM 就绪前查询节点
@@ -736,19 +738,137 @@
     });
   }
 
-  /** GET /api/health -> 侧栏设备信息 */
+  /** GET /api/health -> 侧栏设备信息（含环境校验结论）+ 设备选择 */
   async function loadGpuInfo() {
     try {
       var res = await fetch('/api/health', { headers: { Accept: 'application/json' } });
       if (!res.ok) throw new Error('health HTTP ' + res.status);
       var data = await res.json();
-      var gpu = data && typeof data.gpu === 'string' && data.gpu.trim() ? data.gpu.trim() : '未知';
-      els.gpuInfo.textContent = gpu.toLowerCase() === 'cpu' ? '设备：CPU 模式' : '设备：' + gpu;
-      els.gpuInfo.title = data && data.model_dir ? '模型目录：' + data.model_dir : '';
+      applyDeviceInfo(data);
     } catch (err) {
       console.warn('[VITS] 读取设备信息失败：', err);
       els.gpuInfo.textContent = '设备：不可用';
       els.gpuInfo.title = '';
+      if (els.deviceHint) els.deviceHint.classList.add('hidden');
+    }
+  }
+
+  /** 把 /api/health（或切设备响应）里的设备信息渲染到侧栏 */
+  function applyDeviceInfo(data) {
+    data = data || {};
+    var info = data.device_info || {};
+    var st = data.device_state || {};
+    var actual = data.device === 'cuda' ? 'cuda' : 'cpu';
+    var pref = data.device_pref || 'auto';
+
+    state.devicePref = pref;
+    if (els.deviceSelect && !state.switchingDevice) els.deviceSelect.value = pref;
+
+    var label;
+    if (actual === 'cuda') {
+      label = '设备：GPU · ' + (info.gpu_name || '已就绪');
+    } else if (info.verdict === 'cpu_build') {
+      label = '设备：CPU（torch 为 CPU 构建）';
+    } else if (info.verdict === 'gpu_mismatch') {
+      label = '设备：CPU（GPU 运行时不匹配）';
+    } else if (info.torch_version) {
+      label = '设备：CPU 模式';
+    } else {
+      label = '设备：未知';
+    }
+    els.gpuInfo.textContent = label;
+
+    var tip = [];
+    if (info.message) tip.push(info.message);
+    if (data.model_dir) tip.push('模型目录：' + data.model_dir);
+    els.gpuInfo.title = tip.join('\n');
+    renderDeviceHint(info, st, actual, pref);
+  }
+
+  /** 设备提示：GPU 已启用 / GPU 不可用的具体原因（不静默回落） */
+  function renderDeviceHint(info, st, actual, pref) {
+    if (!els.deviceHint) return;
+    var msg = '';
+    var kind = 'warn';
+
+    if (actual === 'cuda') {
+      msg = 'GPU 加速已启用' + (st && st.reason ? '：' + st.reason : '');
+      kind = 'ok';
+    } else if (st && st.fallback) {
+      msg = '已回落 CPU · ' + String(st.reason || info.message || 'GPU 不可用');
+    } else if (pref !== 'cpu' && info && info.verdict === 'cpu_build' &&
+               info.nvidia_smi && info.nvidia_smi.available) {
+      msg = '检测到 NVIDIA 显卡，但 torch 是 CPU 构建；想用 GPU 请安装 GPU 加速补丁包';
+    } else if (pref !== 'cpu' && info && info.verdict === 'gpu_mismatch') {
+      msg = 'GPU 不可用（驱动/CUDA 不匹配）：' + String(info.message || '');
+    }
+
+    if (!msg) {
+      els.deviceHint.textContent = '';
+      els.deviceHint.classList.add('hidden');
+      return;
+    }
+    els.deviceHint.textContent = msg;
+    els.deviceHint.title = (info && info.hint) ? info.hint : msg;
+    els.deviceHint.classList.remove('hidden');
+    els.deviceHint.classList.toggle('ok', kind === 'ok');
+    els.deviceHint.classList.toggle('warn', kind !== 'ok');
+  }
+
+  /** POST /api/settings/device：切换推理设备（GPU 不可用会被后端回落 CPU 并说明原因） */
+  async function switchDevice(pref) {
+    if (state.switchingDevice) return;
+    if (state.busy) {
+      showToast('正在合成，请等这一句结束再切换设备', true);
+      if (els.deviceSelect) els.deviceSelect.value = state.devicePref || 'auto';
+      return;
+    }
+
+    var previous = state.devicePref || 'auto';
+    state.switchingDevice = true;
+    els.deviceSelect.disabled = true;
+    setStatus('busy', '切换设备');
+
+    try {
+      var res = await fetch('/api/settings/device', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ device: pref })
+      });
+      if (!res.ok) throw new Error(await readError(res));
+      var data = await res.json();
+
+      var fallback = !!(data.state && data.state.fallback);
+      var loadNote = data.reloaded
+        ? '，模型已重新加载（' + trimNum(data.load_seconds) + 's）'
+        : '';
+      var msg;
+      if (data.device === 'cuda') {
+        msg = '已切换到 GPU' + loadNote;
+      } else if (pref === 'gpu') {
+        msg = 'GPU 不可用，已回落 CPU：' +
+          String((data.state && data.state.reason) || (data.info && data.info.message) || '');
+      } else {
+        msg = '已切换到 CPU' + loadNote;
+      }
+      showToast(msg, fallback);
+      applyDeviceInfo({
+        device: data.device,
+        device_pref: data.pref,
+        device_info: data.info,
+        device_state: data.state,
+        model_dir: ''
+      });
+      setStatus('ok', '就绪');
+    } catch (err) {
+      console.error('[VITS] 切换设备失败：', err);
+      els.deviceSelect.value = previous;
+      showToast('切换设备失败：' + humanizeError(err), true);
+      setStatus('ok', '就绪');
+      loadGpuInfo().catch(function (e) { console.warn('[VITS] 刷新设备信息失败：', e); });
+    } finally {
+      state.switchingDevice = false;
+      els.deviceSelect.disabled = false;
     }
   }
 
@@ -2122,6 +2242,9 @@
     });
 
     // 侧栏底部按钮
+    els.deviceSelect.addEventListener('change', function () {
+      switchDevice(els.deviceSelect.value).catch(reportUnexpected);
+    });
     els.btnReload.addEventListener('click', function () {
       reloadModels().catch(reportUnexpected);
     });
@@ -2165,6 +2288,8 @@
       statusDot: byId('status-dot'),
       statusText: byId('status-text'),
       gpuInfo: byId('gpu-info'),
+      deviceSelect: byId('device-select'),
+      deviceHint: byId('device-hint'),
       text: byId('text'),
       charCount: byId('char-count'),
       langChips: byId('lang-chips'),

@@ -54,7 +54,9 @@
 
 | 方法 | 路径 | 用途 | 响应类型 |
 |---|---|---|---|
-| `GET` | `/api/health` | 健康检查、设备与模型目录信息（含当前加载的模型） | `application/json` |
+| `GET` | `/api/health` | 健康检查、设备与模型目录信息（含当前加载的模型、推理设备校验） | `application/json` |
+| `GET` | `/api/settings/device` | 当前推理设备选择 + 环境校验（torch 构建 / CUDA / 显卡 / 驱动） | `application/json` |
+| `POST` | `/api/settings/device` | 切换推理设备（auto/cpu/gpu），写回 config.json，必要时重载模型 | `application/json` |
 | `GET` | `/api/models` | 列出所有模型 | `application/json` |
 | `POST` | `/api/models/reload` | 重新扫描模型目录 | `application/json` |
 | `POST` | `/api/models/load` | 只加载模型（不合成），用于诊断引擎版本/加载失败原因 | `application/json` |
@@ -81,7 +83,7 @@
 | `GET` | `/` | 返回网页 UI（`app/web/index.html`） | `text/html` |
 | `GET` | `/static/*` | 网页静态资源（CSS/JS） | 按文件类型 |
 
-> 上表 **26 行 = 25 个路由 + 1 个 `/static` 静态挂载**，与 `server.py` 一一对应。分组：核心（health / models / tts / audio / shutdown / 页面）→ 添加与管理模型（`/api/models/scan|install|import_hf|remove`）→ 导出到手机（`/api/ondevice/*`）。
+> 上表 **28 行 = 27 个路由 + 1 个 `/static` 静态挂载**，与 `server.py` 一一对应。分组：核心（health / settings / models / tts / audio / shutdown / 页面）→ 添加与管理模型（`/api/models/scan|install|import_hf|remove`）→ 导出到手机（`/api/ondevice/*`）。
 
 **没有** `/api/quit`、`/api/config`、`/api/voices` 之类的端点——请不要照着别的项目臆测。
 
@@ -1211,3 +1213,71 @@ curl.exe -s -X POST http://127.0.0.1:7788/api/audio/save -H "Content-Type: appli
 - [README.md](../README.md) —— 项目总览、启动与打包
 - [ADD_MODEL.md](ADD_MODEL.md) —— 新增模型 / 零样本模型
 - [harmony/README.md](../harmony/README.md) —— 鸿蒙 APP 与局域网联调
+
+---
+
+## 8. 推理设备（v0.1.1-portable 新增）
+
+便携包自带 CPU 版 torch，也可以在装了 CUDA 版 torch 后使用 NVIDIA 显卡。设备选择写在
+`config.json` 的 `device` 字段（`auto` / `cpu` / `gpu`），启动时也会读取（环境变量
+`VITS_DEVICE` 优先）。
+
+### 8.1 环境校验：`GET /api/health` 新增字段
+
+| 字段 | 说明 |
+|---|---|
+| `device` | 实际在用的设备：`cuda` / `cpu` |
+| `device_pref` | 用户选择：`auto` / `cpu` / `gpu` |
+| `device_info` | 环境校验结果，见下 |
+| `device_state` | 本次解析结果（`requested` / `device` / `fallback` / `reason`） |
+
+`device_info` 结构：
+
+```json
+{
+  "torch_version": "2.8.0+cpu",
+  "torch_cuda": "",
+  "cpu_build": true,
+  "cuda_available": false,
+  "gpu_name": null,
+  "vram_mb": null,
+  "capability": null,
+  "nvidia_smi": {"available": true, "name": "NVIDIA GeForce RTX 5070 Ti Laptop GPU",
+                 "driver": "621.24", "vram_mb": 12227},
+  "verdict": "cpu_build",
+  "message": "当前 torch 是 CPU 构建（2.8.0+cpu，无 CUDA），但检测到 NVIDIA 显卡 …",
+  "hint": "下载 cuda-torch-patch.zip 解压覆盖 …"
+}
+```
+
+`verdict` 只有四种：`ready`（CUDA torch + 显卡可用）、`cpu_build`（torch 无 CUDA）、
+`gpu_mismatch`（torch 带 CUDA 但驱动 / CUDA 运行时不可用）、`unknown`（读不到 torch）。
+
+### 8.2 切换设备：`POST /api/settings/device`
+
+请求：
+
+```json
+{"device": "gpu"}
+```
+
+响应（GPU 不可用时不会静默：`fallback=true` + `reason`，`device` 回落 `cpu`）：
+
+```json
+{
+  "ok": true,
+  "pref": "gpu",
+  "device": "cpu",
+  "state": {"requested": "gpu", "device": "cpu", "fallback": true,
+            "reason": "GPU 不可用，已自动回落 CPU：当前 torch 是 CPU 构建 …"},
+  "info": {"verdict": "cpu_build"},
+  "reloaded": null,
+  "load_seconds": null,
+  "reload_error": null
+}
+```
+
+- 切换时会释放已加载的模型并重建引擎；若之前有加载过模型，会同步重新加载
+  （`reloaded` 返回模型 id，`load_seconds` 返回耗时；本机实测约 2 秒）。
+- 选择会写回 `config.json`（`VITS_CONFIG` 指向的文件），下次启动沿用。
+- `GET /api/settings/device` 返回同样结构，不改任何状态。

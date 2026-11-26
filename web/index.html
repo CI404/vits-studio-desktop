@@ -24,7 +24,16 @@
     <button id="btn-export-side" class="add-btn" title="导出经典 VITS 模型到鸿蒙端（生成 .zip）">⇪ 导出到手机</button>
 
     <div class="sidebar-foot">
+      <div class="device-pick">
+        <label for="device-select" class="small">推理设备</label>
+        <select id="device-select" title="GPU 需要 CUDA 版 torch（GPU 加速补丁包）">
+          <option value="auto">自动</option>
+          <option value="cpu">CPU</option>
+          <option value="gpu">GPU</option>
+        </select>
+      </div>
       <div id="gpu-info" class="muted small">检测设备…</div>
+      <div id="device-hint" class="device-hint small hidden"></div>
       <button id="btn-reload" class="ghost small">重新扫描模型</button>
       <button id="btn-quit" class="ghost small danger">退出应用</button>
     </div>

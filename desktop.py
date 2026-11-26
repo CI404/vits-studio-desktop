@@ -8,6 +8,10 @@
   绑定 127.0.0.1 随机端口，只服务于这个窗口；
 - 关窗口 → 关服务 → 退出。
 
+两种运行形态：
+- **便携模式**（exe 同级有 runtime/python 与 models/）：全部用相对路径，零配置；
+- 开发/轻量模式：沿用 VITS_PYTHON / VITS_MODELS 环境变量或 config.json。
+
 打包：`build_exe.ps1` 把它打成 `dist/VITS Studio/VITS Studio.exe`。
 """
 from __future__ import annotations
@@ -33,18 +37,30 @@ else:
     BUNDLE = APP_DIR
     RUNTIME_DIR = APP_DIR
 
+# ---------- 便携模式：exe 同级有 runtime\python 和 models\ ----------
+PORTABLE = ((RUNTIME_DIR / "runtime" / "python").is_dir()
+            and (RUNTIME_DIR / "models").is_dir())
+
 CONFIG = RUNTIME_DIR / "config.json"
 _CFG = {}
 if CONFIG.exists():
     try:
-        _CFG = json.loads(CONFIG.read_text(encoding="utf-8"))
+        _CFG = json.loads(CONFIG.read_text(encoding="utf-8-sig"))
     except Exception:  # noqa: BLE001
         _CFG = {}
 
-PY = Path(os.environ.get("VITS_PYTHON", _CFG.get("python", r"<VITS_ENV>\venv-modern\Scripts\python.exe")))
+if PORTABLE:
+    PY = RUNTIME_DIR / "runtime" / "python" / "python.exe"
+    MODELS = str(RUNTIME_DIR / "models")
+    GPT_SOVITS = RUNTIME_DIR / "runtime" / "gpt-sovits"
+else:
+    PY = Path(os.environ.get("VITS_PYTHON", _CFG.get("python", r"<VITS_ENV>\venv-modern\Scripts\python.exe")))
+    MODELS = os.environ.get("VITS_MODELS", _CFG.get("models_dir", r"<PROJECT_ROOT>\models_out;<PROJECT_ROOT>\VITS标准模型;<PROJECT_ROOT>\community_models"))
+    GPT_SOVITS = Path(os.environ.get("VITS_GPT_SOVITS", _CFG.get("gpt_sovits", r"<VITS_ENV>\GPT-SoVITS")))
+
+DEVICE = str(os.environ.get("VITS_DEVICE", _CFG.get("device", "auto")) or "auto")
 SERVER = BUNDLE / "backend" / "server.py"
 LOGS = RUNTIME_DIR / "logs"
-MODELS = os.environ.get("VITS_MODELS", _CFG.get("models_dir", r"<PROJECT_ROOT>\models_out;<PROJECT_ROOT>\VITS标准模型;<PROJECT_ROOT>\community_models"))
 HOST = "127.0.0.1"
 TITLE = "VITS Studio"
 
@@ -96,7 +112,13 @@ def start_server(port: int) -> subprocess.Popen:
     env.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
     # 「导出到手机」的 zip 落在 exe 同级 ondevice_out\（用户能找到；可用环境变量覆盖）
     env.setdefault("VITS_ONDEVICE_OUT", str(RUNTIME_DIR / "ondevice_out"))
-    cmd = [str(PY), "-u", str(SERVER), "--port", str(port), "--models", str(MODELS)]
+    # 后端子进程也走同一份 config.json（设备选择的持久化）与同一套 GPT-SoVITS
+    env["VITS_CONFIG"] = str(CONFIG)
+    env["VITS_DEVICE"] = DEVICE
+    if PORTABLE or GPT_SOVITS.exists():
+        env["VITS_GPT_SOVITS"] = str(GPT_SOVITS)
+    cmd = [str(PY), "-u", str(SERVER), "--port", str(port), "--models", str(MODELS),
+           "--device", DEVICE]
     log("spawn " + " ".join(cmd))
     return subprocess.Popen(
         cmd, cwd=str(APP_DIR), env=env, stdout=out, stderr=subprocess.STDOUT,
@@ -140,8 +162,15 @@ def run_window(url: str) -> bool:
 
 
 def main() -> int:
+    log(f"mode={'portable' if PORTABLE else 'dev/light'} root={RUNTIME_DIR} "
+        f"python={PY} models={MODELS} gpt={GPT_SOVITS} device={DEVICE}")
     if not PY.exists():
-        fatal(f"找不到模型环境：\n{PY}\n\n请在 app/CONTEXT.md 查看如何配置 VITS_PYTHON。")
+        if PORTABLE:
+            fatal(f"便携包不完整：找不到 {PY}\n\n"
+                  f"请确认 runtime\\python\\python.exe 存在；"
+                  f"若下载了多个分卷，需全部解压到同一目录。")
+        else:
+            fatal(f"找不到模型环境：\n{PY}\n\n请在 app/CONTEXT.md 查看如何配置 VITS_PYTHON。")
         return 1
     if not SERVER.exists():
         fatal(f"找不到后端：{SERVER}")
@@ -152,7 +181,7 @@ def main() -> int:
 
     port = free_port()
     proc = start_server(port)
-    if not wait_health(port, 90.0):
+    if not wait_health(port, 180.0 if PORTABLE else 90.0):
         proc.terminate()
         fatal(f"后端启动超时，详见：\n{LOGS / 'server.log'}")
         return 1

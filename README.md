@@ -10,7 +10,59 @@
 
 ## 下载（Release）
 
-不想自己打包？直接下构建好的 Windows 整包：
+两种形态，按需选：
+
+| | 轻量版（需自备环境） | 便携版（开箱即用） |
+|---|---|---|
+| Release | [v0.1.0](https://github.com/CI404/vits-studio-desktop/releases/tag/v0.1.0) | [**v0.1.1-portable**](https://github.com/CI404/vits-studio-desktop/releases/tag/v0.1.1-portable) |
+| 体积 | 34.6 MB（解压 86 MB） | 3 个分卷合计 3.14 GiB（解压 4.70 GiB） |
+| 需要 | 本机 Python 3.10+ / torch / GPT-SoVITS 仓库 / 模型权重 | **什么都不用装**：内置 Python 3.12 + CPU 版 torch + GPT-SoVITS 代码 + 预训练底模 + 3 个角色模型 |
+| 适合 | 已有推理环境、想自己控制依赖 | 想双击就用、不熟 Python 的人 |
+
+### 便携版 v0.1.1-portable（推荐）
+
+| 文件 | 大小 | 内容 |
+|---|---|---|
+| `vits-studio-portable-part1.zip` | 1216 MiB | `VITS Studio.exe` + `_internal/` + `runtime/python`（嵌入式 Python 3.12 + CPU 版 torch）+ GPT-SoVITS 代码 + `tools/` |
+| `vits-studio-portable-part2-pretrained.zip` | 1232.7 MiB | 预训练底模：s1v3、s2Gv2Pro、chinese-roberta-wwm-ext-large、chinese-hubert-base、eres2net、中文 G2PW、语种识别 |
+| `vits-studio-portable-part3-models.zip` | 768.9 MiB | HK416 / xya / Tong 三个角色模型（含 `ref.wav` / `ref.txt` / `model.json`） |
+| `verify.ps1` | 5.4 KB | 解压前校验 SHA256；解压后检查关键文件并试导入 torch |
+| `SHA256SUMS.txt` | 0.3 KB | 三个分卷的 SHA256 |
+| `install-cuda-torch.ps1` | 4.6 KB | 可选：给便携包装 CUDA 版 torch（GPU 加速；`part1/tools/` 里也有一份） |
+
+```text
+f43ebee8f8262cb87f7c0a1f25e6dea669b04cb07350a51c9cd239134b67654a  vits-studio-portable-part1.zip
+e3bb70cf3df8b15986286e1f09c89260e1beb18dac887842391485f5ed19364c  vits-studio-portable-part2-pretrained.zip
+a57f325d5340d9606a27b0e168da4ffc97bf09cf6cb5f9316ee5b3449587ae7f  vits-studio-portable-part3-models.zip
+```
+
+**怎么用（3 步）**：三个 zip 解压到**同一个目录** → 双击 `VITS Studio Portable\VITS Studio.exe` →
+左侧选模型、输入文字、生成。完整说明（体积构成 / CPU 速度 / GPU 补丁 / 常见问题 / 模型授权）
+见包内 `README.txt`。解压前后都可以先跑校验：
+
+```powershell
+# 解压前：zip 与 verify.ps1 放同一目录
+powershell -NoProfile -ExecutionPolicy Bypass -File .\verify.ps1
+# 解压后：verify.ps1 放进 VITS Studio Portable 目录
+powershell -NoProfile -ExecutionPolicy Bypass -File .\verify.ps1
+```
+
+**实测（构建机：Intel Core Ultra 9 275HX，24 核 / 31 GB / Windows 11）**
+
+| 项目 | CPU（内置 torch `2.8.0+cpu`） | GPU（另装 cu129 torch，RTX 5070 Ti Laptop） |
+|---|---|---|
+| 双击到后端就绪 | 3.0 s | 3.0 s |
+| 第一句（中文，含加载模型 / 首次初始化） | 18.6–21.9 s | 4.4–20.5 s（首次含 GPU 初始化） |
+| 稳态每句（11–16 字中文 / 日语） | 3.8–5.2 s | 渲染 1.4–2.2 s（切换模型另加约 2 s 加载） |
+
+- 基础包内置 **CPU 版 torch**，任何 Windows 10/11 x64 都能跑；想用 NVIDIA 显卡：
+  运行 `tools\install-cuda-torch.ps1`（联网约 2.5–3 GB），或用任意 CUDA 版 torch 覆盖
+  `runtime\python\Lib\site-packages\torch*`，重启后在左侧「推理设备」选「自动 / CPU / GPU」。
+  应用会显示 torch 构建类型、CUDA 版本、显卡 / 显存 / 驱动，GPU 不可用时写明原因并自动回落 CPU。
+- 合成全程不联网（实测合成期间 0 个外连）；「添加模型 → HuggingFace」与 GPU 补丁需要网络。
+- 模型权重仅限个人研究，禁止商用 / 二次分发音色，详见 `NOTICE.md` 与包内 `README.txt`。
+
+### 轻量版 v0.1.0（需自备环境）
 
 **[Release v0.1.0 · 桌面版 VITS Studio](https://github.com/CI404/vits-studio-desktop/releases/tag/v0.1.0)**
 
@@ -20,7 +72,7 @@
 
 ```powershell
 Expand-Archive .\VITS_Studio_v0.1.0_win64.zip -DestinationPath .\apps
-# 运行前设好两个路径（或写 exe 同级的 config.json，见 §3.2）
+# 运行前设好路径（或写 exe 同级的 config.json，见 §3.2）
 $env:VITS_PYTHON = '<VITS_ENV>\venv-modern\Scripts\python.exe'
 $env:VITS_MODELS = '<MODELS_DIR>\models_out'
 .\apps\VITS Studio\VITS Studio.exe
@@ -123,7 +175,10 @@ vits-studio-desktop/
 | **显卡** | 建议 ≥ 8 GB 显存；CPU 也能跑但很慢 |
 | Windows | Windows 10/11 + WebView2 运行时（Win11 自带） |
 
-### 3.2 两个必填环境变量
+### 3.2 路径配置（开发 / 轻量模式）
+
+> **便携版（v0.1.1-portable）不需要这一节**：exe 同级存在 `runtime\python` 与 `models\` 时会自动进入
+> 便携模式，全部用相对路径、零配置；`config.json` 只保存推理设备选择（`device`）。
 
 所有默认路径都是**脱敏占位符**（`<VITS_ENV>` / `<PROJECT_ROOT>` / `<USER>` 等），
 第一次跑请显式指定：
@@ -133,6 +188,10 @@ vits-studio-desktop/
 $env:VITS_PYTHON  = '<VITS_ENV>\venv-modern\Scripts\python.exe'
 # 模型目录（`;` 分隔多个）
 $env:VITS_MODELS  = '<MODELS_DIR>\models_out;<MODELS_DIR>\VITS标准模型'
+# 可选：GPT-SoVITS 仓库（默认 <VITS_ENV>\GPT-SoVITS）
+$env:VITS_GPT_SOVITS = '<VITS_ENV>\GPT-SoVITS'
+# 可选：推理设备 auto | cpu | gpu
+$env:VITS_DEVICE  = 'auto'
 ```
 
 或者把它们写进 exe / 仓库同级目录的 `config.json`（结构见 `config.example.json`）：
@@ -140,12 +199,15 @@ $env:VITS_MODELS  = '<MODELS_DIR>\models_out;<MODELS_DIR>\VITS标准模型'
 ```json
 {
   "python": "<VITS_ENV>\\venv-modern\\Scripts\\python.exe",
-  "models_dir": "<MODELS_DIR>\\models_out"
+  "models_dir": "<MODELS_DIR>\\models_out",
+  "gpt_sovits": "<VITS_ENV>\\GPT-SoVITS",
+  "device": "auto"
 }
 ```
 
 > `backend/*.py` 与 `desktop.py` 里出现的 `<VITS_ENV>` / `<PROJECT_ROOT>` 就是原开发机上的绝对路径，
 > 被批量替换成了占位符。**不设置上面两个变量时程序会以「找不到模型环境」退出**，这是预期行为。
+> 设备选择的持久化写入 `VITS_CONFIG` 指向的 `config.json`（启动器会自动传给后端子进程）。
 
 ### 3.3 场景 A：双击使用（推荐）
 
@@ -159,6 +221,9 @@ powershell -ExecutionPolicy Bypass -File .\build_exe.ps1
 
 窗口出现（首次 5–15 s，后端在后台启动；启动器最多等 90 s，超时弹错误框；日志写在 exe 同级 `logs\`）。
 左侧选角色 → 输入文本（≤500 字）→ 选语言（`ja` / `zh` / `en`）→「生成语音」→ 播放 / 下载 WAV。
+
+左侧底部还有「推理设备：自动 / CPU / GPU」：选 GPU 时应用会校验 torch 是否 CUDA 构建、驱动 / CUDA
+是否匹配、显卡型号与显存，不可用时明确提示原因并自动回落 CPU（选择写入 `config.json`）。
 **关窗即退出**，后台服务一并结束。
 
 > 「下载 WAV」保存到 `%USERPROFILE%\Downloads\VITS Studio\<模型id>_<时间戳>.wav`；

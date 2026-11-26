@@ -1,5 +1,7 @@
 {
-  "_comment": "可选：放在 VITS Studio.exe 同目录，覆盖默认路径",
+  "_comment": "可选：放在 VITS Studio.exe 同目录，覆盖默认路径；device 可写 auto/cpu/gpu",
   "python": "<VITS_ENV>\\venv-modern\\Scripts\\python.exe",
-  "models_dir": "<PROJECT_ROOT>\\models_out"
+  "models_dir": "<PROJECT_ROOT>\\models_out",
+  "gpt_sovits": "<VITS_ENV>\\GPT-SoVITS",
+  "device": "auto"
 }

@@ -1,7 +1,7 @@
 """VITS Studio 后端：给桌面端 / 鸿蒙 APP 共用的 HTTP API。
 
 启动：
-    python app/backend/server.py --port 7788 --models <PROJECT_ROOT>\\models_out
+    python app/backend/server.py --port 7788 --models <PROJECT_ROOT>/models_out
 
 接口：
     GET  /api/health
@@ -24,6 +24,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -63,7 +64,164 @@ STATE = {
     "saved_wav": {},       # sha256 -> 已保存路径（同一段音频不重复写盘）
     "last_save": {},
     "started_at": time.time(),
+    # ---- 推理设备 ----
+    "device_pref": "auto",      # 用户选择：auto | cpu | gpu
+    "device": "cpu",            # 实际在用：cuda | cpu
+    "device_info": {},          # 环境校验结果（torch 构建 / CUDA / 驱动）
+    "device_state": {},         # 本次解析结果（是否回落、原因）
 }
+
+
+# ===========================================================================
+# 推理设备：环境校验 + 切换（GPU 需要 CUDA 版 torch 补丁包）
+# ===========================================================================
+
+# config.json（便携包里就是应用根目录的那份）用来持久化设备选择
+CONFIG_PATH = Path(os.environ.get("VITS_CONFIG")
+                   or (Path(__file__).resolve().parents[1] / "config.json"))
+DEVICE_PREFS = ("auto", "cpu", "gpu")
+_DEVICE_SWITCH_LOCK = threading.Lock()
+
+
+def _read_settings() -> dict:
+    try:
+        data = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
+        return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _write_settings(patch: dict) -> None:
+    data = _read_settings()
+    data.update(patch)
+    try:
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, CONFIG_PATH)
+    except OSError as e:  # noqa: BLE001
+        print(f"[settings] 写 {CONFIG_PATH} 失败：{type(e).__name__}: {e}", flush=True)
+
+
+def _nvidia_smi() -> dict:
+    """读 nvidia-smi：显卡名 / 驱动版本 / 显存。没装驱动或没卡时 available=False。"""
+    exe = shutil.which("nvidia-smi") or shutil.which("nvidia-smi.exe")
+    if not exe:
+        for cand in (r"C:\Windows\System32\nvidia-smi.exe",
+                     r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe"):
+            if Path(cand).exists():
+                exe = cand
+                break
+    if not exe:
+        return {"available": False, "reason": "未找到 nvidia-smi（多半没装 NVIDIA 驱动）"}
+    try:
+        p = subprocess.run(
+            [exe, "--query-gpu=name,driver_version,memory.total",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, timeout=8,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        out = (p.stdout or b"").decode("utf-8", "replace").strip()
+        if p.returncode != 0 or not out:
+            return {"available": False,
+                    "reason": "nvidia-smi 执行失败（驱动未安装或没有可用显卡）"}
+        parts = [x.strip() for x in out.splitlines()[0].split(",")]
+        vram = None
+        if len(parts) > 2 and parts[2]:
+            try:
+                vram = int(float(parts[2]))
+            except ValueError:
+                vram = None
+        return {"available": True,
+                "name": parts[0] if parts else "",
+                "driver": parts[1] if len(parts) > 1 else "",
+                "vram_mb": vram}
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "reason": f"{type(e).__name__}: {e}"}
+
+
+def _device_info() -> dict:
+    """环境校验：torch 构建类型、CUDA 可用性、显卡、驱动，并给出结论。
+
+    verdict:
+      ready        —— CUDA 版 torch + 显卡可用（已就绪）
+      cpu_build    —— torch 是 CPU 构建（想用 GPU 需装 GPU 补丁包）
+      gpu_mismatch —— torch 带 CUDA，但驱动/CUDA 运行时不可用
+      unknown      —— 读不到 torch 环境
+    """
+    info: dict = {
+        "torch_version": None, "torch_cuda": None, "cpu_build": None,
+        "cuda_available": False, "gpu_name": None, "vram_mb": None,
+        "capability": None, "nvidia_smi": _nvidia_smi(),
+        "verdict": "unknown", "message": "", "hint": "",
+    }
+    try:
+        import torch
+        info["torch_version"] = str(torch.__version__)
+        info["torch_cuda"] = str(torch.version.cuda or "")
+        info["cpu_build"] = torch.version.cuda is None
+        info["cuda_available"] = bool(torch.cuda.is_available())
+        if info["cuda_available"]:
+            info["gpu_name"] = torch.cuda.get_device_name(0)
+            props = torch.cuda.get_device_properties(0)
+            info["vram_mb"] = int(round(props.total_memory / 1024 / 1024))
+            info["capability"] = f"{props.major}.{props.minor}"
+    except Exception as e:  # noqa: BLE001
+        info["error"] = f"{type(e).__name__}: {e}"
+
+    smi = info["nvidia_smi"]
+    if info["cpu_build"] is None:
+        info["verdict"] = "unknown"
+        info["message"] = f"读不到 torch 环境：{info.get('error', '未知错误')}"
+        info["hint"] = "检查 runtime\\python 是否完整（便携包）或 VITS_PYTHON 指向的 Python"
+    elif info["cuda_available"]:
+        info["verdict"] = "ready"
+        info["message"] = (
+            f"GPU 已就绪：{info['gpu_name']}（显存 {info['vram_mb']} MB，"
+            f"算力 {info['capability']}，CUDA {info['torch_cuda']}，torch {info['torch_version']}）")
+    elif info["cpu_build"]:
+        info["verdict"] = "cpu_build"
+        if smi.get("available"):
+            info["message"] = (
+                f"当前 torch 是 CPU 构建（{info['torch_version']}，无 CUDA），"
+                f"但检测到 NVIDIA 显卡 {smi.get('name')}（驱动 {smi.get('driver')}）。"
+                f"想用 GPU 加速请安装 GPU 补丁包（tools\\install-cuda-torch.ps1）")
+            info["hint"] = ("下载 cuda-torch-patch.zip 解压覆盖到 "
+                            "runtime\\python\\Lib\\site-packages（或运行 "
+                            "tools\\install-cuda-torch.ps1），然后重启应用")
+        else:
+            info["message"] = (
+                f"当前 torch 是 CPU 构建（{info['torch_version']}），"
+                f"且未检测到 NVIDIA 驱动/显卡，只能 CPU 推理（会慢一些）")
+    else:
+        info["verdict"] = "gpu_mismatch"
+        detail = (f"驱动 {smi.get('driver')}" if smi.get("available")
+                  else smi.get("reason") or "没有 NVIDIA 驱动")
+        info["message"] = (
+            f"torch 带 CUDA（{info['torch_cuda']}），但 torch.cuda.is_available()=False："
+            f"驱动过旧或与 CUDA 运行时不匹配（{detail}）")
+        info["hint"] = "更新 NVIDIA 驱动，或切成 CPU 使用"
+    return info
+
+
+def _resolve_device(pref: str, info: dict) -> tuple[str, dict]:
+    """按用户选择 + 环境结论决定实际设备；GPU 不可用时回落 CPU 并说明原因。"""
+    pref = pref if pref in DEVICE_PREFS else "auto"
+    ready = info.get("verdict") == "ready"
+    if pref == "cpu":
+        return "cpu", {"requested": "cpu", "device": "cpu", "fallback": False,
+                       "reason": "已按选择使用 CPU"}
+    if pref == "gpu":
+        if ready:
+            return "cuda", {"requested": "gpu", "device": "cuda", "fallback": False,
+                            "reason": f"已按选择使用 GPU：{info.get('gpu_name')}"}
+        return "cpu", {"requested": "gpu", "device": "cpu", "fallback": True,
+                       "reason": "GPU 不可用，已自动回落 CPU：" + str(info.get("message") or "")}
+    if ready:
+        return "cuda", {"requested": "auto", "device": "cuda", "fallback": False,
+                        "reason": f"自动选择 GPU：{info.get('gpu_name')}"}
+    return "cpu", {"requested": "auto", "device": "cpu", "fallback": False,
+                   "reason": "自动使用 CPU：" + str(info.get("message") or "")}
 
 
 class TTSRequest(BaseModel):
@@ -88,7 +246,7 @@ def _refresh(model_dir) -> None:
         except Exception:  # noqa: BLE001
             pass
     STATE["models"] = discover(roots)
-    STATE["engine"] = Engine(device=STATE.get("device", "cuda"))
+    STATE["engine"] = Engine(device=STATE.get("device", "cpu"))
     print(f"[models] {len(STATE['models'])} 个:",
           [(m.id, m.engine_version, m.ready) for m in STATE["models"]], flush=True)
 
@@ -111,7 +269,89 @@ def health():
         "gpu": _gpu_name(),
         "loaded_model": getattr(engine, "loaded_model", None),
         "loaded_engine_version": getattr(engine, "loaded_version", None),
+        # ---- 推理设备 ----
+        "device": STATE.get("device", "cpu"),
+        "device_pref": STATE.get("device_pref", "auto"),
+        "device_info": STATE.get("device_info") or {},
+        "device_state": STATE.get("device_state") or {},
     }
+
+
+class DeviceSettingsReq(BaseModel):
+    """POST /api/settings/device 的请求体：auto | cpu | gpu。"""
+
+    device: str = "auto"
+
+
+@app.get("/api/settings/device")
+def get_device_settings():
+    """当前设备选择 + 环境校验（torch 构建 / CUDA / 显卡 / 驱动）。"""
+    return {
+        "pref": STATE.get("device_pref", "auto"),
+        "device": STATE.get("device", "cpu"),
+        "state": STATE.get("device_state") or {},
+        "info": STATE.get("device_info") or {},
+    }
+
+
+@app.post("/api/settings/device")
+def set_device_settings(req: DeviceSettingsReq):
+    """切换推理设备，并把选择写进 config.json（下次启动沿用）。
+
+    - GPU 不可用时**不静默**：返回 fallback=true + reason（CPU 构建 / 驱动不匹配），
+      实际设备回落 cpu；
+    - 切换时会释放已加载的模型、重建引擎，若之前有加载过的模型则重新加载（CPU 上约 10–15 s）。
+    """
+    pref = (req.device or "auto").strip().lower()
+    if pref not in DEVICE_PREFS:
+        raise HTTPException(400, f"device 只能是 {'/'.join(DEVICE_PREFS)}")
+
+    with _DEVICE_SWITCH_LOCK:
+        info = _device_info()
+        actual, state = _resolve_device(pref, info)
+        old = STATE.get("engine")
+        previous = getattr(old, "loaded_model", None)
+        if old is not None:
+            try:
+                old.unload()
+            except Exception as e:  # noqa: BLE001
+                print(f"[device] 释放旧引擎失败：{type(e).__name__}: {e}", flush=True)
+
+        STATE.update(device_pref=pref, device=actual,
+                     device_info=info, device_state=state)
+        STATE["engine"] = Engine(device=actual)
+
+        reloaded = None
+        load_seconds = None
+        reload_error = None
+        if previous:
+            target = _find(previous)
+            if target is not None and target.ready:
+                t0 = time.time()
+                try:
+                    STATE["engine"].load(target)
+                    reloaded = target.id
+                    load_seconds = getattr(STATE["engine"], "last_load_seconds", None)
+                except Exception as e:  # noqa: BLE001
+                    reload_error = f"{type(e).__name__}: {e}"
+                    print(f"[device] 切换后重新加载 {target.id} 失败：{reload_error}", flush=True)
+                else:
+                    load_seconds = round(time.time() - t0, 1) if load_seconds is None else load_seconds
+
+        _write_settings({"device": pref})
+        print(f"[device] 切换 pref={pref} -> actual={actual} "
+              f"(verdict={info.get('verdict')}, fallback={state.get('fallback')}, "
+              f"reloaded={reloaded}, {load_seconds}s) | {state.get('reason')}", flush=True)
+        return {
+            "ok": True,
+            "pref": pref,
+            "device": actual,
+            "state": state,
+            "info": info,
+            "reloaded": reloaded,
+            "load_seconds": load_seconds,
+            "reload_error": reload_error,
+        }
 
 
 def _gpu_name() -> str:
@@ -646,11 +886,23 @@ def main() -> int:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=7788)
     p.add_argument("--models", default=r"<PROJECT_ROOT>\models_out;<PROJECT_ROOT>\VITS标准模型;<PROJECT_ROOT>\community_models")
-    p.add_argument("--device", default="cuda")
+    p.add_argument("--device", default=None,
+                   help="推理设备 auto|cpu|gpu（缺省读 config.json 的 device，再缺省 auto）")
     p.add_argument("--preload", action="store_true", help="启动时先加载第一个模型")
     args = p.parse_args()
 
-    STATE["device"] = args.device
+    pref = (args.device or os.environ.get("VITS_DEVICE")
+            or _read_settings().get("device") or "auto")
+    pref = str(pref).strip().lower()
+    if pref not in DEVICE_PREFS:
+        print(f"[device] 未知设备 {pref!r}，按 auto 处理", flush=True)
+        pref = "auto"
+    info = _device_info()
+    actual, dev_state = _resolve_device(pref, info)
+    STATE.update(device_pref=pref, device=actual, device_info=info, device_state=dev_state)
+    print(f"[device] 选择={pref} 实际={actual} 结论={info.get('verdict')} "
+          f"torch={info.get('torch_version')} CUDA={info.get('torch_cuda') or '无'} "
+          f"GPU={info.get('gpu_name') or '无'} | {dev_state.get('reason')}", flush=True)
     _refresh(args.models)
     if args.preload and STATE["models"]:
         try:

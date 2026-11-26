@@ -31,7 +31,8 @@ except ImportError:  # pragma: no cover
                                   detect_sovits_version, missing_engine_deps,
                                   normalize_version)
 
-REPO = Path(r"<VITS_ENV>\GPT-SoVITS")
+# 便携包会把 GPT-SoVITS 放在 <应用目录>\runtime\gpt-sovits，由启动器用 VITS_GPT_SOVITS 指定
+REPO = Path(os.environ.get("VITS_GPT_SOVITS") or r"<VITS_ENV>\GPT-SoVITS")
 PRETRAINED = REPO / "GPT_SoVITS" / "pretrained_models"
 # 兼容开发模式（vits-upgrade/tools/_stubs）与打包模式（backend/_stubs）
 _CANDIDATES = [
@@ -93,6 +94,10 @@ def _prepare_sys() -> None:
             sys.path.insert(0, p)
     os.chdir(REPO)          # GPT-SoVITS 用大量相对路径
     os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+    # 便携包把 nltk_data（英文 G2P 词表/tagger）放在 runtime\nltk_data，随包离线可用
+    _nltk = REPO.parent / "nltk_data"
+    if _nltk.is_dir():
+        os.environ.setdefault("NLTK_DATA", str(_nltk))
     _sys_ready = True
 
 
