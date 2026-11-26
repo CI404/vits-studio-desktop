@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VITS Studio</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">V</div>
+      <div>
+        <div class="brand-name">VITS Studio</div>
+        <div class="brand-sub">GPT-SoVITS v1 / v2 / v2Pro</div>
+      </div>
+    </div>
+
+    <div class="section-label">模型 <span id="model-count" class="pill">0</span></div>
+    <div id="model-list" class="model-list"><div class="empty">加载中…</div></div>
+
+    <button id="btn-add" class="add-btn">＋ 添加模型</button>
+    <button id="btn-export-side" class="add-btn" title="导出经典 VITS 模型到鸿蒙端（生成 .zip）">⇪ 导出到手机</button>
+
+    <div class="sidebar-foot">
+      <div id="gpu-info" class="muted small">检测设备…</div>
+      <button id="btn-reload" class="ghost small">重新扫描模型</button>
+      <button id="btn-quit" class="ghost small danger">退出应用</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <h1 id="active-name">选择一个模型</h1>
+        <div id="active-meta" class="muted small"></div>
+      </div>
+      <div class="topbar-right">
+        <span id="status-dot" class="dot"></span>
+        <span id="status-text" class="muted small">就绪</span>
+        <button id="btn-export" class="ghost small" title="把经典 VITS 模型打包成鸿蒙端可导入的 zip">导出到手机</button>
+        <button id="btn-remove" class="ghost small danger" title="把当前模型移出模型库">移除模型</button>
+      </div>
+    </header>
+
+    <section class="composer">
+      <textarea id="text" rows="5" placeholder="输入要合成的文本…（Ctrl+Enter 生成）"></textarea>
+      <div class="composer-foot">
+        <div class="chips" id="lang-chips"></div>
+        <div class="counter"><span id="char-count">0</span>/500</div>
+      </div>
+
+      <div class="controls">
+        <label class="control">
+          <span>语速 <b id="speed-val">1.00</b></span>
+          <input id="speed" type="range" min="0.6" max="1.6" step="0.05" value="1">
+        </label>
+        <label class="control">
+          <span>温度 <b id="temp-val">1.00</b></span>
+          <input id="temp" type="range" min="0.5" max="1.5" step="0.05" value="1">
+        </label>
+        <button id="btn-gen" class="primary">生成语音</button>
+      </div>
+    </section>
+
+    <section class="player-card">
+      <audio id="audio" controls></audio>
+      <div class="player-meta">
+        <span id="meta-render" class="muted small"></span>
+        <div class="player-actions">
+          <button id="download" class="ghost small" type="button" disabled title="保存到 下载\VITS Studio">下载 WAV</button>
+          <button id="reveal" class="ghost small hidden" type="button" title="在资源管理器里显示刚保存的文件">打开文件夹</button>
+        </div>
+        <span id="save-path" class="save-path hidden"></span>
+      </div>
+    </section>
+
+    <section class="history">
+      <div class="section-label">历史</div>
+      <div id="history-list" class="history-list"><div class="empty small">暂无</div></div>
+    </section>
+  </main>
+</div>
+
+<div id="modal" class="modal hidden">
+  <div class="modal-card wide">
+    <div class="modal-head">
+      <h2>添加模型</h2>
+      <button id="modal-close" class="icon-btn" title="关闭">✕</button>
+    </div>
+
+    <div class="tabs">
+      <button class="tab active" data-tab="local">本地目录</button>
+      <button class="tab" data-tab="hf">HuggingFace</button>
+      <button class="tab" data-tab="help">说明</button>
+    </div>
+
+    <!-- ============ 本地目录 ============ -->
+    <div class="tab-panel" data-panel="local">
+      <div class="row">
+        <label class="grow">权重所在目录
+          <input id="add-path" placeholder="例如 D:\下载\某个模型">
+        </label>
+        <button id="add-browse" class="ghost" title="选择文件夹">浏览…</button>
+        <button id="add-scan" class="primary">扫描</button>
+      </div>
+      <div id="add-scan-hint" class="muted small">扫描后会列出目录里的权重、参考音和文本，自动识别模型版本。</div>
+
+      <div id="add-form" class="hidden">
+        <div class="row">
+          <label class="grow">SoVITS 权重 (s2) <select id="add-s2"></select></label>
+        </div>
+        <div class="row">
+          <label class="grow">GPT 权重 (s1) <select id="add-s1"></select></label>
+        </div>
+        <div class="row">
+          <label class="grow">参考音 (<span id="add-version-badge" class="tag">?</span>) <select id="add-ref-wav"></select></label>
+        </div>
+        <div class="row">
+          <label class="grow">参考音文本
+            <textarea id="add-ref-text" rows="2" placeholder="这段话必须和参考音逐字一致"></textarea>
+          </label>
+        </div>
+        <div class="row">
+          <label class="grow">显示名 <input id="add-name" placeholder="例如 四国めたん"></label>
+          <label>语言
+            <select id="add-lang">
+              <option value="ja">日语 ja</option>
+              <option value="zh">中文 zh</option>
+              <option value="en">英语 en</option>
+            </select>
+          </label>
+        </div>
+        <div class="row">
+          <label class="radio"><input type="radio" name="add-mode" value="copy" checked> 拷贝到模型库（自包含）</label>
+          <label class="radio"><input type="radio" name="add-mode" value="register"> 只登记路径（零拷贝，适合大模型）</label>
+        </div>
+        <div class="row end">
+          <button id="add-install" class="primary">安装模型</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ HuggingFace ============ -->
+    <div class="tab-panel hidden" data-panel="hf">
+      <div class="row">
+        <label class="grow">仓库 ID
+          <input id="hf-repo" placeholder="例如 4nm1tsu/shikokumetan_GPT-SoVITS">
+        </label>
+      </div>
+      <div class="row">
+        <label class="grow">显示名 <input id="hf-name" placeholder="留空则用仓库名"></label>
+        <label>语言
+          <select id="hf-lang">
+            <option value="ja">日语 ja</option>
+            <option value="zh">中文 zh</option>
+            <option value="en">英语 en</option>
+          </select>
+        </label>
+      </div>
+      <div class="row end">
+        <button id="hf-start" class="primary">下载并安装</button>
+      </div>
+      <div id="hf-progress" class="hidden">
+        <div class="bar"><div id="hf-bar" style="width:0%"></div></div>
+        <div id="hf-msg" class="muted small">准备中…</div>
+      </div>
+      <div class="muted small" style="margin-top:8px">
+        自动挑最大的 SoVITS / GPT 权重下载，按权重头识别版本（v1/v2/v3/v4/v2Pro/v2ProPlus）。
+      </div>
+    </div>
+
+    <!-- ============ 说明 ============ -->
+    <div class="tab-panel hidden" data-panel="help">
+      <ol class="help-list">
+        <li>模型就是模型库里的一个文件夹：<code>SoVITS 权重 + GPT 权重 + ref.wav + ref.txt + model.json</code>。</li>
+        <li>「本地目录」适合已经下载好的权重：扫描 → 选文件 → 安装；拷贝模式会把权重复制进
+          <code>community_models\</code>，登记模式只在原位置建一个 <code>model.json</code>。</li>
+        <li>「HuggingFace」适合直接从仓库拉取，装完自动出现在模型列表。</li>
+        <li>社区包可以没有 <code>model.json</code>：程序会自动探测 <code>*.pth/*.ckpt</code> 与
+          <code>ref*.wav/txt</code>（也支持 <code>dataset/xxx.wav</code>）；版本按
+          <code>engine_version</code> 或权重头识别（v1/v2/v2Pro/v2ProPlus），并在卡片上显示「社区」与引擎版本。</li>
+        <li>参考音必须是<strong>角色本人的 3–10 秒干净语音</strong>，文本逐字一致；否则音色会跑偏。
+          社区包常缺参考音，卡片会标「缺参考音」，补上 <code>ref.wav</code> + <code>ref.txt</code> 即可。</li>
+        <li>安装后可随时「移除」：目录会被移到 <code>_removed\</code>，不会真删。</li>
+      </ol>
+    </div>
+  </div>
+</div>
+
+
+<!-- ==================== 导出到手机（鸿蒙端模型包） ==================== -->
+<div id="export-modal" class="modal hidden">
+  <div class="modal-card wide">
+    <div class="modal-head">
+      <h2>导出到手机 · 鸿蒙端模型包</h2>
+      <button id="export-close" class="icon-btn" title="关闭">✕</button>
+    </div>
+
+    <div id="export-status" class="muted small">检测工具链…</div>
+    <div id="export-banner" class="banner hidden"></div>
+
+    <div class="row" style="margin-top:10px">
+      <label class="grow">要导出的模型（经典 VITS · 22.05 kHz）
+        <select id="export-model"></select>
+      </label>
+      <label>卡片显示名
+        <input id="export-display" placeholder="留空 = 模型默认">
+      </label>
+    </div>
+
+    <div class="row">
+      <label class="grow">语音档位（多选；句子帧数决定运行时用哪一档，全选最稳）
+        <div id="export-tiers" class="tier-row"></div>
+      </label>
+    </div>
+
+    <div class="row">
+      <label class="grow">输出目录（zip 落盘位置）
+        <input id="export-out" placeholder="留空 = 默认目录">
+      </label>
+      <button id="export-browse" class="ghost" title="选择文件夹">浏览…</button>
+      <button id="export-start" class="primary">开始导出</button>
+    </div>
+    <div id="export-hint" class="muted small"></div>
+
+    <div id="export-progress" class="progress-box hidden">
+      <div class="stage-row">
+        <span id="export-stage" class="stage">准备中…</span>
+        <span id="export-pct" class="pct">0%</span>
+      </div>
+      <div class="bar"><div id="export-bar" class="bar-fill"></div></div>
+      <div id="export-message" class="muted small"></div>
+      <pre id="export-log" class="export-log"></pre>
+    </div>
+
+    <div id="export-result" class="result-box hidden">
+      <div class="result-head">✅ 导出完成</div>
+      <div id="export-result-meta" class="muted small"></div>
+      <div id="export-result-path" class="path mono"></div>
+      <div class="row" style="margin-top:4px">
+        <button id="export-reveal" class="ghost">打开所在文件夹</button>
+        <button id="export-push" class="primary">直接传到手机</button>
+      </div>
+      <div id="export-push-result" class="muted small"></div>
+    </div>
+
+    <div class="section-label" style="margin-top:18px">
+      已生成的包 <span id="export-pkg-count" class="pill">0</span>
+    </div>
+    <div id="export-packages" class="pkg-list"><div class="empty small">加载中…</div></div>
+
+    <div class="export-footer muted small">
+      端上只支持「经典 VITS v1（22.05 kHz）」。导出后把 zip 推到手机 →
+      App「模型」区「导入模型」→ 选中 zip。GPT-SoVITS 模型（models_out / 社区包）不能导出。
+    </div>
+  </div>
+</div>
+
+
+<div id="toast" class="toast hidden"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

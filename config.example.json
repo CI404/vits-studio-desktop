@@ -1,0 +1,5 @@
+{
+  "_comment": "可选：放在 VITS Studio.exe 同目录，覆盖默认路径",
+  "python": "<VITS_ENV>\\venv-modern\\Scripts\\python.exe",
+  "models_dir": "<PROJECT_ROOT>\\models_out"
+}

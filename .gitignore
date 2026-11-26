@@ -1,0 +1,37 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ── 模型权重绝不入库（体积 + 版权，见 NOTICE.md）──
+models/
+*.pth
+*.ckpt
+*.pt
+*.safetensors
+*.onnx
+*.ms
+*.npz
+*.npy
+
+# ── 运行期 / 构建产物 ──
+logs/
+dist/
+build/
+ondevice_out/
+config.json
+
+# ── 缓存与依赖 ──
+node_modules/
+.venv/
+venv/
+
+# ── 编辑器 / 系统 ──
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.tmp
