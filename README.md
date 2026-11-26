@@ -31,7 +31,7 @@
 | `install-cuda-torch.ps1` | 4.6 KB | 可选：给便携包装 CUDA 版 torch（GPU 加速；`part1/tools/` 里也有一份） |
 
 ```text
-f43ebee8f8262cb87f7c0a1f25e6dea669b04cb07350a51c9cd239134b67654a  vits-studio-portable-part1.zip
+5f87cc4730539ac62ec9586fb37470540c08e79274f2ddf23f62f3358c76b993  vits-studio-portable-part1.zip
 e3bb70cf3df8b15986286e1f09c89260e1beb18dac887842391485f5ed19364c  vits-studio-portable-part2-pretrained.zip
 a57f325d5340d9606a27b0e168da4ffc97bf09cf6cb5f9316ee5b3449587ae7f  vits-studio-portable-part3-models.zip
 ```
