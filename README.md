@@ -8,6 +8,31 @@
 
 ---
 
+## 下载（Release）
+
+不想自己打包？直接下构建好的 Windows 整包：
+
+**[Release v0.1.0 · 桌面版 VITS Studio](https://github.com/CI404/vits-studio-desktop/releases/tag/v0.1.0)**
+
+| 文件 | 大小 | 放哪里 / 怎么用 |
+|---|---|---|
+| `VITS_Studio_v0.1.0_win64.zip` | 34.64 MB（解压后 86.42 MB） | 解压得 `VITS Studio/VITS Studio.exe` + `VITS Studio/_internal/`，**保持同一目录**，双击 `VITS Studio.exe` |
+
+```powershell
+Expand-Archive .\VITS_Studio_v0.1.0_win64.zip -DestinationPath .\apps
+# 运行前设好两个路径（或写 exe 同级的 config.json，见 §3.2）
+$env:VITS_PYTHON = '<VITS_ENV>\venv-modern\Scripts\python.exe'
+$env:VITS_MODELS = '<MODELS_DIR>\models_out'
+.\apps\VITS Studio\VITS Studio.exe
+```
+
+- **EXE 不含 Python / torch / GPT-SoVITS 仓库 / 模型权重**：它只是启动器，必须指向本机可用的模型环境
+  （`VITS_PYTHON` / `VITS_MODELS` 环境变量，或 exe 同级 `config.json`），否则会以「找不到模型环境」退出。
+- `_internal/` 必须和 `VITS Studio.exe` 放在一起，别只拷 exe；首次启动会在同级建 `logs/`。
+- zip 里没放 `logs/`（开发机的运行日志残留，启动时自动重建）；SHA256 与逐项说明见 Release 页面。
+
+---
+
 ## 1. 架构
 
 ```text
